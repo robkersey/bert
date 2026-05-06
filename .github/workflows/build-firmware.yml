@@ -1,0 +1,120 @@
+name: build-firmware
+
+# Builds Zephyr's hci_uart sample for the nRF52840 USB Dongle and uploads
+# the .hex as a GitHub Release asset. Triggered on:
+#   - manual dispatch (workflow_dispatch),
+#   - any tag matching `firmware-*` (the canonical way to publish).
+#
+# After a successful run, update src/bert/firmware/manifest.json with the
+# release tag + SHA256 from the workflow output, commit, and cut a Bert
+# release. Bert will then download this firmware on demand at flash time.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to publish under (e.g. firmware-2026.05.06)"
+        required: true
+      zephyr_revision:
+        description: "Zephyr revision to build against"
+        required: true
+        default: "v3.7.0"
+  push:
+    tags:
+      - "firmware-*"
+
+permissions:
+  contents: write  # needed to create releases
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/zephyrproject-rtos/ci:v0.27.4
+      options: --user root
+    env:
+      ZEPHYR_REVISION: ${{ inputs.zephyr_revision || 'v3.7.0' }}
+    steps:
+      - name: Checkout Bert (only for context; not strictly needed to build hci_uart)
+        uses: actions/checkout@v4
+
+      - name: Set up Zephyr workspace
+        run: |
+          set -euxo pipefail
+          mkdir -p /workspace
+          cd /workspace
+          west init -m https://github.com/zephyrproject-rtos/zephyr --mr "$ZEPHYR_REVISION" .
+          west update --narrow -o=--depth=1
+          west zephyr-export
+          pip install -r zephyr/scripts/requirements.txt
+
+      - name: Build hci_uart for nRF52840 USB Dongle
+        working-directory: /workspace
+        run: |
+          set -euxo pipefail
+          west build \
+            -b nrf52840dongle/nrf52840 \
+            -d build-hci-dongle \
+            zephyr/samples/bluetooth/hci_uart
+          mkdir -p $GITHUB_WORKSPACE/firmware-out
+          cp build-hci-dongle/zephyr/zephyr.hex \
+             $GITHUB_WORKSPACE/firmware-out/hci_uart_nrf52840dongle.hex
+
+      - name: Hash + size
+        id: meta
+        working-directory: ${{ github.workspace }}/firmware-out
+        run: |
+          set -euxo pipefail
+          SHA=$(sha256sum hci_uart_nrf52840dongle.hex | awk '{print $1}')
+          SIZE=$(stat -c%s hci_uart_nrf52840dongle.hex 2>/dev/null || stat -f%z hci_uart_nrf52840dongle.hex)
+          echo "sha256=$SHA"  >> $GITHUB_OUTPUT
+          echo "size=$SIZE"   >> $GITHUB_OUTPUT
+          echo "## hci_uart_nrf52840dongle.hex" >> $GITHUB_STEP_SUMMARY
+          echo "- sha256: \`$SHA\`"             >> $GITHUB_STEP_SUMMARY
+          echo "- size:   $SIZE bytes"          >> $GITHUB_STEP_SUMMARY
+          echo "- zephyr: $ZEPHYR_REVISION"     >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload build artefact (always)
+        uses: actions/upload-artifact@v4
+        with:
+          name: hci_uart_nrf52840dongle
+          path: firmware-out/hci_uart_nrf52840dongle.hex
+          if-no-files-found: error
+
+      - name: Determine release tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.release_tag }}" ]; then
+            echo "tag=${{ inputs.release_tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create / update release
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          files: firmware-out/hci_uart_nrf52840dongle.hex
+          fail_on_unmatched_files: true
+          body: |
+            Pre-built firmware images for Bert.
+
+            | file | sha256 | size | zephyr |
+            |---|---|---|---|
+            | `hci_uart_nrf52840dongle.hex` | `${{ steps.meta.outputs.sha256 }}` | ${{ steps.meta.outputs.size }} bytes | `${{ env.ZEPHYR_REVISION }}` |
+
+            Update `src/bert/firmware/manifest.json` to point at this release:
+
+            ```json
+            "release_tag": "${{ steps.tag.outputs.tag }}",
+            "base_url": "https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}",
+            "firmware": {
+              "hci": {
+                "filename": "hci_uart_nrf52840dongle.hex",
+                "sha256": "${{ steps.meta.outputs.sha256 }}",
+                "size_bytes": ${{ steps.meta.outputs.size }}
+              }
+            }
+            ```

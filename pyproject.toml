@@ -1,0 +1,85 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bert-ble-tester"
+version = "0.1.0"
+description = "BLE profile compliance tester. Verifies a physical BLE device against a Bluetooth SIG profile spec, using a host-OS-independent stack (Bumble + nRF52840 dongles)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Bert", email = "rob@phazeone.com" }]
+keywords = ["bluetooth", "ble", "testing", "compliance", "bumble", "nrf52840"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Testing",
+    "Topic :: System :: Hardware",
+]
+dependencies = [
+    "bumble>=0.0.200",
+    "scapy>=2.5.0",
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    "typer>=0.12",
+    "rich>=13.7",
+    "textual>=0.60",
+    "pymupdf>=1.24",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+    "httpx>=0.27",
+    "pyserial>=3.5",
+    "jinja2>=3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+bert = "bert.cli.main:app"
+
+[project.entry-points."bert.procedures"]
+generic = "bert.runner.procedures:register"
+heart_rate = "bert.profiles.heart_rate.tests:register"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bert"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/bert/firmware" = "bert/firmware"
+"src/bert/vendor" = "bert/vendor"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "hwil: hardware-in-the-loop tests requiring physical dongles + DUT",
+    "integration: tests using Bumble virtual controller (no hardware)",
+]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+plugins = ["pydantic.mypy"]

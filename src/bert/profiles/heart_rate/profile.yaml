@@ -1,0 +1,138 @@
+schema_version: 1
+
+metadata:
+  name: Heart Rate Profile
+  abbrev: HRP
+  version: "1.0"
+  source_doc: https://www.bluetooth.com/specifications/specs/heart-rate-profile-1-0/
+  source_doc_sha256: null
+  role_under_test: peripheral
+  reviewer: rob@phazeone.com
+  reviewed_at: 2026-05-01
+
+services:
+  - uuid: "0x180D"
+    name: Heart Rate
+    requirement: mandatory
+    characteristics:
+      - uuid: "0x2A37"
+        name: Heart Rate Measurement
+        requirement: mandatory
+        properties: [notify]
+        cccd: mandatory
+        permissions:
+          read: false
+          write: false
+        value:
+          format: struct
+          fields:
+            - name: flags
+              type: uint8
+            - name: hr_value
+              type: uint8_or_uint16
+              conditional_on: "flags.bit0"
+            - name: energy_expended
+              type: uint16
+              conditional_on: "flags.bit3"
+              # rr_intervals folded into raw tail; runner unpacks per flags.bit4
+      - uuid: "0x2A38"
+        name: Body Sensor Location
+        requirement: optional
+        properties: [read]
+        value:
+          format: enum_uint8
+          range: [0, 6]
+      - uuid: "0x2A39"
+        name: Heart Rate Control Point
+        requirement: conditional
+        condition: "energy_expended_supported == true"
+        properties: [write]
+        value:
+          format: uint8
+          opcodes:
+            reset_energy_expended: 1
+
+  - uuid: "0x180A"
+    name: Device Information
+    requirement: mandatory
+    characteristics:
+      - uuid: "0x2A29"
+        name: Manufacturer Name String
+        requirement: optional
+        properties: [read]
+        value:
+          format: string
+
+advertising:
+  flags:
+    LE_General_Discoverable: required
+    BR_EDR_Not_Supported: required
+  service_uuids_in_adv_or_scan_response:
+    - "0x180D"
+  local_name:
+    presence: required_in_adv_or_scan_response
+  interval_ms:
+    min: 20.0
+    max: 10240.0
+
+gap:
+  connectable: true
+  bondable: optional
+  min_security_level: 1
+  pairing_methods_allowed:
+    - just_works
+    - passkey
+    - oob
+  mtu_min: 23
+  mtu_preferred: 247
+
+procedures:
+  - id: hrm_notify_cadence
+    description: HRM notifications must arrive at the sensor's stated rate.
+    bounds:
+      interval_ms:
+        min: 250.0
+        max: 2000.0
+  - id: control_point_reset
+    description: Writing 0x01 to HRCP resets Energy Expended field to 0 in subsequent HRM notifications.
+    applies_if: "0x2A39 present"
+  - id: advertising_interval
+    description: Advertising interval observed over the air must lie within SIG-spec bounds.
+    bounds:
+      interval_ms:
+        min: 20.0
+        max: 10240.0
+
+test_cases:
+  - id: TC_HRP_001
+    title: Mandatory services discoverable
+    procedure: discover_mandatory_services
+    source: host
+    requires:
+      - "services.0x180D"
+      - "services.0x180A"
+
+  - id: TC_HRP_002
+    title: Heart Rate Measurement notifications received within cadence bounds
+    procedure: subscribe_and_measure_cadence
+    source: host
+    bound: hrm_notify_cadence
+    requires:
+      - "services.0x180D.characteristics.0x2A37"
+    timeout_s: 30.0
+
+  - id: TC_HRP_003
+    title: Advertising interval over the air within bounds
+    procedure: ota_advertising_interval
+    source: ota
+    bound: advertising_interval
+    timeout_s: 30.0
+
+  - id: TC_HRP_004
+    title: Heart Rate Control Point reset zeroes Energy Expended
+    procedure: hrcp_reset_behaviour
+    source: host
+    bound: control_point_reset
+    applies_if: "0x2A39 present"
+    requires:
+      - "services.0x180D.characteristics.0x2A39"

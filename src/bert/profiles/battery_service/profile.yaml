@@ -1,0 +1,62 @@
+schema_version: 1
+
+metadata:
+  name: Battery Service
+  abbrev: BAS
+  version: "1.0"
+  source_doc: https://www.bluetooth.com/specifications/specs/battery-service-1-0/
+  source_doc_sha256: null
+  role_under_test: peripheral
+  reviewer: rob@phazeone.com
+  reviewed_at: 2026-05-01
+
+services:
+  - uuid: "0x180F"
+    name: Battery Service
+    requirement: mandatory
+    characteristics:
+      - uuid: "0x2A19"
+        name: Battery Level
+        requirement: mandatory
+        properties: [read, notify]
+        cccd: conditional
+        value:
+          format: uint8
+          range: [0, 100]
+          units: "%"
+
+advertising:
+  flags:
+    LE_General_Discoverable: required
+    BR_EDR_Not_Supported: required
+  service_uuids_in_adv_or_scan_response:
+    - "0x180F"
+  interval_ms:
+    min: 20.0
+    max: 10240.0
+
+gap:
+  connectable: true
+  min_security_level: 1
+  pairing_methods_allowed:
+    - just_works
+    - passkey
+  mtu_min: 23
+  mtu_preferred: 247
+
+procedures:
+  - id: battery_level_in_range
+    description: Battery Level reads must lie within 0..100 %.
+
+test_cases:
+  - id: TC_BAS_001
+    title: Battery Service mandatory and discoverable
+    procedure: discover_mandatory_services
+    source: host
+
+  - id: TC_BAS_002
+    title: Battery Level read returns a value in [0, 100]
+    procedure: read_characteristic
+    source: host
+    requires:
+      - "services.0x180F.characteristics.0x2A19"

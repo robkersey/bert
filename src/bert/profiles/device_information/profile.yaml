@@ -1,0 +1,71 @@
+schema_version: 1
+
+metadata:
+  name: Device Information Service
+  abbrev: DIS
+  version: "1.1"
+  source_doc: https://www.bluetooth.com/specifications/specs/device-information-service-1-1/
+  source_doc_sha256: null
+  role_under_test: peripheral
+  reviewer: rob@phazeone.com
+  reviewed_at: 2026-05-01
+
+services:
+  - uuid: "0x180A"
+    name: Device Information
+    requirement: mandatory
+    characteristics:
+      - uuid: "0x2A29"
+        name: Manufacturer Name String
+        requirement: optional
+        properties: [read]
+        value:
+          format: string
+      - uuid: "0x2A24"
+        name: Model Number String
+        requirement: optional
+        properties: [read]
+        value:
+          format: string
+      - uuid: "0x2A25"
+        name: Serial Number String
+        requirement: optional
+        properties: [read]
+        value:
+          format: string
+      - uuid: "0x2A27"
+        name: Hardware Revision String
+        requirement: optional
+        properties: [read]
+        value:
+          format: string
+      - uuid: "0x2A26"
+        name: Firmware Revision String
+        requirement: optional
+        properties: [read]
+        value:
+          format: string
+      - uuid: "0x2A28"
+        name: Software Revision String
+        requirement: optional
+        properties: [read]
+        value:
+          format: string
+      - uuid: "0x2A23"
+        name: System ID
+        requirement: optional
+        properties: [read]
+        value:
+          format: raw
+
+gap:
+  connectable: true
+  min_security_level: 1
+  mtu_min: 23
+  mtu_preferred: 247
+
+test_cases:
+  - id: TC_DIS_001
+    title: Device Information Service is present
+    procedure: discover_mandatory_services
+    source: host
