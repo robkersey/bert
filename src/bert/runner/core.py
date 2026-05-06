@@ -18,7 +18,7 @@ from bert.adapters.pcap import fold_pcap_into_timeline
 from bert.adapters.sniffer import SnifferCapture
 from bert.ir import Profile, TestCase, TestCaseSource, assert_runnable
 from bert.runner import registry
-from bert.runner.assertions import AssertionFailure
+from bert.runner.assertions import AssertionFailure, SkipTest
 from bert.runner.context import TestContext
 from bert.runner.timeline import Timeline
 
@@ -196,6 +196,15 @@ class Runner:
                 status="passed",
                 started_ns=ctx.started_ns,
                 ended_ns=ctx.ended_ns,
+            )
+        except SkipTest as skip:
+            ctx.ended_ns = self.timeline.now_ns()
+            return TestResult(
+                test_case=tc,
+                status="skipped",
+                started_ns=ctx.started_ns,
+                ended_ns=ctx.ended_ns,
+                skip_reason=skip.reason,
             )
         except AssertionFailure as fail:
             ctx.ended_ns = self.timeline.now_ns()

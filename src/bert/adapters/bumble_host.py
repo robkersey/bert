@@ -83,6 +83,28 @@ class BumbleHost:
             return UUID.from_32_bits(int(s, 16))
         return UUID(value)
 
+    @staticmethod
+    def _canonical_uuid(value: object) -> str:
+        """Render a Bumble UUID (or string) as Bert's canonical form: ``0x180D``
+        for short UUIDs, ``00001234-...`` for full 128-bit. Used so that
+        ``discover_services`` output can be string-compared against the IR.
+        """
+        from bumble.core import UUID  # type: ignore[import-not-found]
+
+        if isinstance(value, UUID):
+            hex_str = value.to_hex_str()
+            if len(hex_str) <= 8:
+                return "0x" + hex_str.upper().lstrip("0").rjust(4, "0")
+            return hex_str.lower()
+        s = str(value).strip()
+        if s.lower().startswith("0x"):
+            return "0x" + s[2:].upper()
+        if "-" in s:
+            return s.lower()
+        if len(s) <= 8 and all(c in "0123456789abcdefABCDEF" for c in s):
+            return "0x" + s.upper().lstrip("0").rjust(4, "0")
+        return s
+
     async def _start(self, transport: str | None) -> None:
         from bumble.device import Device  # type: ignore[import-not-found]
         from bumble.transport import open_transport_or_link  # type: ignore[import-not-found]
@@ -289,17 +311,31 @@ class BumbleHost:
     # ------------------------------------------------------------------ #
 
     async def discover_services(self) -> list[str]:
+        """Return every service UUID present on the DUT, in canonical form.
+
+        Canonical form: ``"0x180D"`` for 16-bit UUIDs, full
+        ``"00001234-..."`` for 128-bit. Cached after first call so repeated
+        calls don't re-walk the GATT tree.
+        """
         if self._services_cache is not None:
             return self._services_cache
         if self._peer is None:
             raise RuntimeError("not connected")
         services = await self._peer.discover_services()
-        out = [str(s.uuid) for s in services]
+        out = [self._canonical_uuid(s.uuid) for s in services]
         self._services_cache = out
         self._timeline.add(
             "host.services_discovered", EventSource.HOST, data={"services": out}
         )
         return out
+
+    async def has_characteristic(self, service_uuid: str, char_uuid: str) -> bool:
+        """Return True iff the DUT exposes ``char_uuid`` under ``service_uuid``."""
+        try:
+            await self._find_characteristic(service_uuid, char_uuid)
+            return True
+        except RuntimeError:
+            return False
 
     async def read(self, service_uuid: str, char_uuid: str) -> bytes | None:
         char = await self._find_characteristic(service_uuid, char_uuid)

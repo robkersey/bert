@@ -27,6 +27,19 @@ class AssertionFailure(AssertionError):
         return self.message
 
 
+class SkipTest(Exception):
+    """Raise from a procedure to skip the current test case with a reason.
+
+    Use when an optional/conditional precondition isn't satisfied on the DUT
+    (e.g. an HRP DUT that doesn't expose the optional Heart Rate Control Point).
+    The runner records the case as ``skipped`` rather than ``failed``.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 # --------------------------------------------------------------------------- #
 # Generic helpers                                                              #
 # --------------------------------------------------------------------------- #
