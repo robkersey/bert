@@ -1,6 +1,6 @@
 {
-  "schema_version": 1,
-  "comment": "Pinned firmware images Bert downloads on demand. Update this file when publishing a new firmware release; bert flash-firmware will then pull the new image. See docs/firmware-release.md for the maintainer workflow.",
+  "schema_version": 2,
+  "comment": "Pinned firmware images and helper binaries Bert downloads on demand. Update this file when publishing new artefacts; the runtime will then pull the new versions. See docs/firmware-release.md for the maintainer workflow.",
   "release_tag": "firmware-2026.05.06",
   "base_url": "https://github.com/robkersey/bert/releases/download/firmware-2026.05.06",
   "firmware": {
@@ -17,6 +17,36 @@
       "sha256": null,
       "description": "Use Nordic's bundled firmware via `nrfutil install ble-sniffer`; Bert auto-discovers it under $NRFUTIL_HOME/share/nrfutil-ble-sniffer/firmware/.",
       "url": null
+    }
+  },
+  "tools": {
+    "comment": "Pre-built helper binaries. We use adafruit-nrfutil (a maintained fork of pc-nrfutil) bundled into a single executable via PyInstaller, so end users don't have to `pip install nrfutil` and pin click<8.0 (which conflicts with typer). Built by .github/workflows/build-dfu-tools.yml.",
+    "bert-dfu": {
+      "release_tag": "dfu-tools-PLACEHOLDER",
+      "base_url": "https://github.com/robkersey/bert/releases/download/dfu-tools-PLACEHOLDER",
+      "description": "adafruit-nrfutil bundled as a single static binary. Used for `pkg generate` and `dfu serial` against the nRF52840 USB Dongle's Open Bootloader.",
+      "platforms": {
+        "darwin-arm64": {
+          "filename": "bert-dfu-darwin-arm64",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "size_bytes": 0
+        },
+        "darwin-x86_64": {
+          "filename": "bert-dfu-darwin-x86_64",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "size_bytes": 0
+        },
+        "linux-x86_64": {
+          "filename": "bert-dfu-linux-x86_64",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "size_bytes": 0
+        },
+        "windows-x86_64": {
+          "filename": "bert-dfu-windows-x86_64.exe",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "size_bytes": 0
+        }
+      }
     }
   }
 }

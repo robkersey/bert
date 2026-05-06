@@ -184,21 +184,78 @@ def test_resolve_firmware_allow_download_false_skips_network(
 
 
 def test_ensure_nrfutil_complains_when_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    from bert.adapters import firmware_fetch
+
     monkeypatch.setattr(flasher.shutil, "which", lambda _name: None)
-    with pytest.raises(flasher.FlashError, match="not found"):
-        flasher.ensure_nrfutil()
+    monkeypatch.setattr(firmware_fetch, "load_tool_manifest", lambda: {})
+    with pytest.raises(flasher.FlashError, match="no usable DFU tool"):
+        flasher.ensure_nrfutil(allow_download=False)
 
 
-@pytest.mark.skipif(os.name != "nt", reason="exercises Windows .exe resolution")
-def test_ensure_nrfutil_finds_exe_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        flasher.shutil, "which", lambda _name: r"C:\Python311\Scripts\nrfutil.exe"
+def test_ensure_nrfutil_prefers_cached_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from bert.adapters import firmware_fetch
+
+    fake = tmp_path / "bert-dfu"
+    fake.write_text("#!/bin/sh\necho ok\n")
+    fake.chmod(0o755)
+
+    spec = firmware_fetch.ToolSpec(
+        name="bert-dfu",
+        platform="darwin-arm64",
+        filename="bert-dfu",
+        url="https://example.invalid/bert-dfu",
+        sha256="a" * 64,
     )
+    monkeypatch.setattr(firmware_fetch, "load_tool_manifest", lambda: {"bert-dfu": spec})
+    monkeypatch.setattr(firmware_fetch, "is_tool_cached", lambda s: True)
+    monkeypatch.setattr(firmware_fetch, "cached_tool_path", lambda s: fake)
+    # Pretend nothing else is on PATH so the cached binary wins.
+    monkeypatch.setattr(flasher.shutil, "which", lambda _name: None)
+    # Probe always returns adafruit dialect.
+    monkeypatch.setattr(
+        flasher,
+        "_probe_nrfutil",
+        lambda p: flasher.DfuTool(path=p, dialect="adafruit"),
+    )
+    tool = flasher.ensure_nrfutil()
+    assert tool.path == str(fake)
+    assert tool.dialect == "adafruit"
 
-    class _R:
-        returncode = 0
-        stdout = "Usage: nrfutil pkg generate ..."
-        stderr = ""
 
-    monkeypatch.setattr(flasher.subprocess, "run", lambda *_a, **_k: _R())
-    assert flasher.ensure_nrfutil().endswith("nrfutil.exe")
+def test_ensure_nrfutil_falls_back_to_path_adafruit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bert.adapters import firmware_fetch
+
+    monkeypatch.setattr(firmware_fetch, "load_tool_manifest", lambda: {})
+
+    def fake_which(name: str) -> str | None:
+        if name == "adafruit-nrfutil":
+            return "/usr/local/bin/adafruit-nrfutil"
+        return None
+
+    monkeypatch.setattr(flasher.shutil, "which", fake_which)
+    monkeypatch.setattr(
+        flasher,
+        "_probe_nrfutil",
+        lambda p: flasher.DfuTool(path=p, dialect="adafruit"),
+    )
+    tool = flasher.ensure_nrfutil(allow_download=False)
+    assert tool.path == "/usr/local/bin/adafruit-nrfutil"
+
+
+def test_dfu_tool_command_dialects() -> None:
+    """The two CLI dialects produce the expected argv shape."""
+    leg = flasher.DfuTool(path="nrfutil", dialect="legacy-python")
+    ada = flasher.DfuTool(path="adafruit-nrfutil", dialect="adafruit")
+    assert leg.dfu_serial_args("p.zip", "/dev/cu.X") == [
+        "nrfutil", "dfu", "usb-serial", "-pkg", "p.zip", "-p", "/dev/cu.X"
+    ]
+    assert ada.dfu_serial_args("p.zip", "/dev/cu.X") == [
+        "adafruit-nrfutil", "dfu", "serial", "--package", "p.zip", "--port", "/dev/cu.X"
+    ]
+    # pkg generate flags are identical between dialects.
+    assert leg.pkg_generate_args("a.hex", "p.zip")[1:3] == ["pkg", "generate"]
+    assert ada.pkg_generate_args("a.hex", "p.zip")[1:3] == ["pkg", "generate"]

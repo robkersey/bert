@@ -13,6 +13,7 @@ from bert.cli import ir as ir_cli
 from bert.cli import pcap as pcap_cli
 from bert.cli import profiles as profiles_cli
 from bert.cli import run as run_cli
+from bert.cli import tools as tools_cli
 
 app = typer.Typer(
     add_completion=False,
@@ -24,6 +25,7 @@ app.add_typer(ir_cli.app, name="ir", help="Author and review profile IR specs.")
 app.add_typer(profiles_cli.app, name="profiles", help="List bundled profiles.")
 app.add_typer(dongles_cli.app, name="dongles", help="Manage dongles (init, flash, list).")
 app.add_typer(firmware_cli.app, name="firmware", help="Manage prebuilt firmware images.")
+app.add_typer(tools_cli.app, name="tools", help="Manage helper-binary cache (bert-dfu).")
 app.add_typer(pcap_cli.app, name="pcap", help="Offline PCAP analysis.")
 app.command(name="run", help="Run a profile against a DUT.")(run_cli.run_command)
 app.command(name="doctor", help="Verify the local install.")(doctor_cli.doctor)

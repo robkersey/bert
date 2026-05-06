@@ -70,30 +70,116 @@ class DfuPort:
 # --------------------------------------------------------------------------- #
 
 
-def ensure_nrfutil() -> str:
-    """Return the path to a usable ``nrfutil``, or raise.
+@dataclass(frozen=True)
+class DfuTool:
+    """A flasher tool: path + which CLI dialect it speaks."""
 
-    We require the legacy Python nrfutil because the dongle's Open Bootloader
-    needs ``pkg generate`` + ``dfu usb-serial``. The newer Rust-based
-    ``nrfutil device`` does not handle the dongle's USB DFU.
+    path: str
+    dialect: str  # "adafruit" | "legacy-python"
+
+    def dfu_serial_args(self, package: str, port: str) -> list[str]:
+        if self.dialect == "adafruit":
+            return [self.path, "dfu", "serial", "--package", package, "--port", port]
+        return [self.path, "dfu", "usb-serial", "-pkg", package, "-p", port]
+
+    def pkg_generate_args(self, hex_path: str, out_zip: str) -> list[str]:
+        # Same flags between adafruit-nrfutil and pc-nrfutil.
+        return [
+            self.path, "pkg", "generate",
+            "--hw-version", "52",
+            "--sd-req", "0",
+            "--application", hex_path,
+            "--application-version", "1",
+            out_zip,
+        ]
+
+
+def _probe_nrfutil(path: str) -> DfuTool | None:
+    """Identify which nrfutil dialect this binary is, or None if unsupported."""
+
+    probe = subprocess.run(
+        [path, "--help"], capture_output=True, text=True, timeout=10
+    )
+    text = (probe.stdout or "") + (probe.stderr or "")
+    # adafruit-nrfutil header explicitly says so; legacy pc-nrfutil mentions
+    # "Nordic Semiconductor". The new Rust nrfutil shows top-level subcommands
+    # like `device`, `ble-sniffer`, etc. and lacks `pkg`/`dfu` entirely.
+    if "adafruit" in text.lower():
+        dialect = "adafruit"
+    elif "Nordic Semiconductor" in text and "pkg" in text and "dfu" in text:
+        dialect = "legacy-python"
+    else:
+        # Could be the Rust nrfutil that lacks pkg/dfu — confirm by probing.
+        sub_probe = subprocess.run(
+            [path, "pkg", "--help"], capture_output=True, text=True, timeout=10
+        )
+        if sub_probe.returncode == 0 and "generate" in (
+            sub_probe.stdout + sub_probe.stderr
+        ):
+            dialect = "legacy-python"
+        else:
+            return None
+    return DfuTool(path=path, dialect=dialect)
+
+
+def ensure_nrfutil(*, allow_download: bool = True) -> DfuTool:
+    """Return a usable DFU tool, preferring (in order):
+
+    1. The cached Bert-shipped binary at
+       ``$BERT_TOOLS_CACHE/bert-dfu/<sha>/bert-dfu-<platform>``. This is a
+       PyInstaller-bundled ``adafruit-nrfutil`` published per-platform on
+       Bert's GitHub Releases — no Python deps to conflict with.
+    2. ``adafruit-nrfutil`` on ``$PATH``.
+    3. ``nrfutil`` on ``$PATH``, if it's the legacy Python variant
+       (rejected if it's the new Rust variant, which lacks USB DFU support).
+
+    If nothing is found and ``allow_download`` is True, attempts to download
+    the Bert-shipped binary from GitHub Releases. A clear error explains the
+    options if download is disabled or the platform isn't supported.
     """
+    from bert.adapters import firmware_fetch
 
-    path = shutil.which("nrfutil")
-    if path is None:
-        raise FlashError(
-            "`nrfutil` not found on PATH. Install the legacy Python tool with:\n"
-            "    pip install nrfutil\n"
-            "(The new Rust-based nrfutil does NOT support the nRF52840 dongle's USB DFU.)"
-        )
-    # Confirm this is the Python flavour by probing for the `pkg` subcommand.
-    probe = subprocess.run([path, "pkg", "--help"], capture_output=True, text=True)
-    if probe.returncode != 0 or "generate" not in probe.stdout + probe.stderr:
-        raise FlashError(
-            f"the `nrfutil` at {path} does not support `pkg generate` — you have the\n"
-            f"new Rust-based nrfutil. Install the legacy Python one alongside it:\n"
-            f"    pip install nrfutil"
-        )
-    return path
+    candidates: list[str] = []
+
+    # 1. Cached binary, if Bert's shipped one exists for this host.
+    if allow_download:
+        tools = firmware_fetch.load_tool_manifest()
+        spec = tools.get("bert-dfu")
+        if spec is not None:
+            if firmware_fetch.is_tool_cached(spec):
+                cached = firmware_fetch.cached_tool_path(spec)
+                candidates.append(str(cached))
+            elif not spec.is_placeholder:
+                try:
+                    candidates.append(str(firmware_fetch.fetch_tool(spec)))
+                except firmware_fetch.FirmwareFetchError as exc:
+                    log.warning("could not fetch bert-dfu: %s", exc)
+
+    # 2. PATH-installed adafruit-nrfutil (no click conflicts with typer).
+    if (p := shutil.which("adafruit-nrfutil")) is not None:
+        candidates.append(p)
+
+    # 3. PATH-installed legacy nrfutil — last resort because installing this
+    #    in the same venv as Bert downgrades click and breaks typer.
+    if (p := shutil.which("nrfutil")) is not None:
+        candidates.append(p)
+
+    for cand in candidates:
+        tool = _probe_nrfutil(cand)
+        if tool is not None:
+            log.info("using DFU tool: %s (%s)", tool.path, tool.dialect)
+            return tool
+
+    raise FlashError(
+        "no usable DFU tool found.\n"
+        "  Bert needs a tool that speaks the nRF52840 dongle's Open Bootloader.\n"
+        "  Options (in order of preference):\n"
+        "    1. Run `bert tools download` to grab the Bert-shipped binary\n"
+        "       (single static executable, no Python deps).\n"
+        "    2. `pipx install adafruit-nrfutil` (isolated venv, won't pollute Bert's).\n"
+        "    3. `pip install adafruit-nrfutil` (only safe in a venv where Bert is NOT installed).\n"
+        "  AVOID `pip install nrfutil` — pc-nrfutil pins click<8 which breaks typer."
+    )
 
 
 def nrfutil_home() -> Path:
@@ -319,13 +405,16 @@ async def wait_for_app_enumeration(
 # --------------------------------------------------------------------------- #
 
 
-async def flash_one(role: str, firmware_path: Path, *, nrfutil_path: str) -> str | None:
+async def flash_one(role: str, firmware_path: Path, *, tool: DfuTool) -> str | None:
     """Flash a single role. Prompts the user; runs nrfutil; returns the new
     application device path (or ``None`` if it didn't re-enumerate in time).
 
     ``firmware_path`` may be a ``.hex`` (raw image; we wrap it with
     ``nrfutil pkg generate``) or a ``.zip`` (already a DFU bundle, e.g.
     Nordic's ``sniffer_nrf52840dongle_nrf52840_*.zip``; we flash it directly).
+
+    ``tool`` is a :class:`DfuTool` describing which nrfutil flavour is in use;
+    obtain one from :func:`ensure_nrfutil`.
     """
 
     console.rule(f"Flashing [bold]{role}[/bold] dongle")
@@ -360,21 +449,14 @@ async def flash_one(role: str, firmware_path: Path, *, nrfutil_path: str) -> str
             pkg = Path(td) / "package.zip"
             try:
                 subprocess.run(
-                    [
-                        nrfutil_path, "pkg", "generate",
-                        "--hw-version", "52",
-                        "--sd-req", "0",
-                        "--application", str(firmware_path),
-                        "--application-version", "1",
-                        str(pkg),
-                    ],
+                    tool.pkg_generate_args(str(firmware_path), str(pkg)),
                     check=True,
                     capture_output=True,
                     text=True,
                 )
             except subprocess.CalledProcessError as e:
                 raise FlashError(
-                    f"nrfutil pkg generate failed:\n{e.stderr or e.stdout}"
+                    f"`{tool.path} pkg generate` failed:\n{e.stderr or e.stdout}"
                 ) from e
         else:
             raise FlashError(
@@ -385,20 +467,16 @@ async def flash_one(role: str, firmware_path: Path, *, nrfutil_path: str) -> str
         console.print("[dim]flashing… (takes 10-30 seconds)[/dim]")
         try:
             proc = subprocess.run(
-                [
-                    nrfutil_path, "dfu", "usb-serial",
-                    "-pkg", str(pkg),
-                    "-p", port.device,
-                ],
+                tool.dfu_serial_args(str(pkg), port.device),
                 check=True,
                 capture_output=True,
                 text=True,
             )
         except subprocess.CalledProcessError as e:
             raise FlashError(
-                f"nrfutil dfu usb-serial failed:\n{e.stderr or e.stdout}"
+                f"`{tool.path} dfu` failed:\n{e.stderr or e.stdout}"
             ) from e
-        log.debug("nrfutil dfu output:\n%s", proc.stdout)
+        log.debug("dfu output:\n%s", proc.stdout)
 
     # Wait for the dongle to re-enumerate as the application device. The new
     # firmware presents under a different USB descriptor — Zephyr samples
@@ -448,12 +526,12 @@ async def flash_all(
 ) -> None:
     """High-level: flash the listed roles, prompting for each."""
 
-    nrfutil_path = ensure_nrfutil()
+    tool = ensure_nrfutil()
     overrides = {"hci": firmware_hci, "sniffer": firmware_sniffer}
     paths = {role: resolve_firmware(role, overrides.get(role)) for role in roles}
 
     for role in roles:
-        await flash_one(role, paths[role], nrfutil_path=nrfutil_path)
+        await flash_one(role, paths[role], tool=tool)
         if role != roles[-1]:
             console.print()
             with suppress(KeyboardInterrupt):

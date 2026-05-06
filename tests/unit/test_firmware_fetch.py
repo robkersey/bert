@@ -171,3 +171,110 @@ def test_clear_cache_removes_files(
     target.write_bytes(b"x")
     assert firmware_fetch.clear_cache() == 1
     assert not target.exists()
+
+
+# --------------------------------------------------------------------------- #
+# Tools manifest + fetch_tool                                                  #
+# --------------------------------------------------------------------------- #
+
+
+def test_host_platform_tag_known_shapes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The tag must look like ``<os>-<arch>`` so it can be looked up in the manifest."""
+    tag = firmware_fetch.host_platform_tag()
+    assert "-" in tag
+    os_part, arch_part = tag.split("-", 1)
+    assert os_part in {"darwin", "linux", "windows"}
+    assert arch_part  # any non-empty
+
+
+def test_host_platform_tag_aliases_amd64(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(firmware_fetch.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(firmware_fetch.platform, "machine", lambda: "AMD64")
+    assert firmware_fetch.host_platform_tag() == "windows-x86_64"
+
+
+def test_load_tool_manifest_returns_host_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The manifest may declare bert-dfu for several platforms; load_tool_manifest
+    only returns specs whose platform matches the host."""
+    monkeypatch.setattr(firmware_fetch, "host_platform_tag", lambda: "linux-x86_64")
+    tools = firmware_fetch.load_tool_manifest()
+    # Either we got bert-dfu for linux, or it was a placeholder and skipped —
+    # but if it's there it must be for this platform.
+    if "bert-dfu" in tools:
+        assert tools["bert-dfu"].platform == "linux-x86_64"
+        assert tools["bert-dfu"].filename.endswith("linux-x86_64") or \
+               tools["bert-dfu"].filename.endswith(".exe")
+
+
+def test_load_tool_manifest_skips_unknown_platform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(firmware_fetch, "host_platform_tag", lambda: "haiku-i386")
+    tools = firmware_fetch.load_tool_manifest()
+    assert tools == {}
+
+
+@pytest.fixture
+def isolated_tool_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setenv("BERT_TOOLS_CACHE", str(tmp_path / "tcache"))
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    return tmp_path / "tcache"
+
+
+def _tool_spec(content: bytes, plat: str = "darwin-arm64") -> firmware_fetch.ToolSpec:
+    return firmware_fetch.ToolSpec(
+        name="bert-dfu",
+        platform=plat,
+        filename=f"bert-dfu-{plat}",
+        url=f"https://example.invalid/bert-dfu-{plat}",
+        sha256=hashlib.sha256(content).hexdigest(),
+        size_bytes=len(content),
+    )
+
+
+def test_fetch_tool_uses_cache_when_present(
+    isolated_tool_cache: Path,
+) -> None:
+    spec = _tool_spec(b"binary-bytes")
+    target = firmware_fetch.cached_tool_path(spec)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"binary-bytes")
+    out = firmware_fetch.fetch_tool(spec)
+    assert out == target
+
+
+def test_fetch_tool_sets_executable_bit(
+    isolated_tool_cache: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if firmware_fetch.os.name == "nt":
+        pytest.skip("executable bit is unix-only")
+    spec = _tool_spec(b"binary-bytes")
+
+    def fake_download(url: str, dst: Path) -> None:
+        dst.write_bytes(b"binary-bytes")
+
+    monkeypatch.setattr(firmware_fetch, "_download_to", fake_download)
+    out = firmware_fetch.fetch_tool(spec)
+    import stat
+    assert out.stat().st_mode & stat.S_IXUSR
+
+
+def test_fetch_tool_refuses_placeholder() -> None:
+    spec = firmware_fetch.ToolSpec(
+        name="bert-dfu",
+        platform="darwin-arm64",
+        filename="bert-dfu-darwin-arm64",
+        url="https://github.com/x/bert/releases/download/dfu-tools-PLACEHOLDER/bert-dfu-darwin-arm64",
+        sha256=firmware_fetch.PLACEHOLDER_SHA,
+    )
+    with pytest.raises(firmware_fetch.FirmwareFetchError, match="placeholder"):
+        firmware_fetch.fetch_tool(spec)
+
+
+def test_clear_tool_cache(isolated_tool_cache: Path) -> None:
+    spec = _tool_spec(b"x")
+    target = firmware_fetch.cached_tool_path(spec)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"x")
+    assert firmware_fetch.clear_tool_cache() == 1
+    assert not target.exists()

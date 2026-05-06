@@ -1,0 +1,223 @@
+name: build-dfu-tools
+
+# Builds adafruit-nrfutil as a single-file PyInstaller binary on each
+# supported host platform and uploads to a GitHub Release. After the run
+# completes, run `scripts/update_tools_manifest.py` to refresh the SHA256s
+# in src/bert/firmware/manifest.json.
+#
+# Why: pc-nrfutil pins click<8.0 which conflicts with typer in any venv
+# Bert lives in. Shipping a self-contained binary lets end users get
+# `bert flash-firmware` working with zero pip-install pain.
+#
+# Triggered on:
+#   - manual dispatch (workflow_dispatch),
+#   - any tag matching `dfu-tools-*`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag (e.g. dfu-tools-2026.05.06)"
+        required: true
+      adafruit_nrfutil_version:
+        description: "adafruit-nrfutil pin"
+        required: true
+        default: "0.5.3.post17"
+  push:
+    tags:
+      - "dfu-tools-*"
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14         # Apple Silicon
+            platform_tag: darwin-arm64
+            artifact_name: bert-dfu-darwin-arm64
+            binary_suffix: ""
+          - runner: macos-13         # Intel
+            platform_tag: darwin-x86_64
+            artifact_name: bert-dfu-darwin-x86_64
+            binary_suffix: ""
+          - runner: ubuntu-22.04
+            platform_tag: linux-x86_64
+            artifact_name: bert-dfu-linux-x86_64
+            binary_suffix: ""
+          - runner: windows-2022
+            platform_tag: windows-x86_64
+            artifact_name: bert-dfu-windows-x86_64.exe
+            binary_suffix: ".exe"
+    runs-on: ${{ matrix.runner }}
+    env:
+      ADAFRUIT_NRFUTIL_VERSION: ${{ inputs.adafruit_nrfutil_version || '0.5.3.post17' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install adafruit-nrfutil + PyInstaller
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install "adafruit-nrfutil==${ADAFRUIT_NRFUTIL_VERSION}" pyinstaller==6.10.0
+
+      - name: Locate adafruit-nrfutil entry point
+        id: ep
+        run: |
+          set -euxo pipefail
+          # The pip-installed `adafruit-nrfutil` console script wraps a
+          # call to nordicsemi.__main__ (or similar). PyInstaller can
+          # follow the entry point if we give it the actual Python script.
+          ENTRY=$(python -c "
+          import shutil, sys
+          p = shutil.which('adafruit-nrfutil') or shutil.which('adafruit-nrfutil.exe')
+          assert p, 'adafruit-nrfutil not on PATH after install'
+          print(p)
+          ")
+          echo "entry=$ENTRY" >> $GITHUB_OUTPUT
+          # Grab the actual Python script path PyInstaller can analyse.
+          # On Windows the .exe is a wrapper; we point PyInstaller at the
+          # nordicsemi.__main__ module directly via a tiny shim.
+
+      - name: Generate PyInstaller shim
+        run: |
+          set -euxo pipefail
+          cat > pyi_shim.py <<'PY'
+          # Tiny entry point that PyInstaller can analyse cleanly. It just
+          # invokes the adafruit-nrfutil click app.
+          import sys
+          from nordicsemi.__main__ import cli
+          if __name__ == "__main__":
+              sys.exit(cli())
+          PY
+          # Smoke-test it via the host Python first.
+          python pyi_shim.py --help > /dev/null
+
+      - name: Build single-file binary with PyInstaller
+        run: |
+          set -euxo pipefail
+          pyinstaller \
+            --onefile \
+            --name "${{ matrix.artifact_name }}" \
+            --collect-all nordicsemi \
+            --collect-all click \
+            --collect-all serial \
+            --collect-all ecdsa \
+            --collect-all libusb1 \
+            --collect-all intelhex \
+            --collect-all pc_ble_driver_py \
+            --hidden-import nordicsemi.dfu.dfu_transport_serial \
+            --hidden-import nordicsemi.dfu.signing \
+            pyi_shim.py
+
+      - name: Smoke-test built binary
+        run: |
+          set -euxo pipefail
+          BIN="dist/${{ matrix.artifact_name }}${{ matrix.binary_suffix }}"
+          if [ ! -f "$BIN" ]; then
+            echo "expected $BIN not produced"; ls -la dist; exit 1
+          fi
+          # `pkg --help` is enough to prove the bundle has all imports.
+          "$BIN" pkg --help > /dev/null
+          "$BIN" dfu --help > /dev/null
+
+      - name: Hash + size
+        id: meta
+        run: |
+          set -euxo pipefail
+          BIN="dist/${{ matrix.artifact_name }}${{ matrix.binary_suffix }}"
+          if [[ "${{ matrix.runner }}" == windows-* ]]; then
+            SHA=$(sha256sum "$BIN" | awk '{print $1}')
+            SIZE=$(wc -c < "$BIN" | tr -d ' ')
+          elif [[ "${{ matrix.runner }}" == macos-* ]]; then
+            SHA=$(shasum -a 256 "$BIN" | awk '{print $1}')
+            SIZE=$(stat -f%z "$BIN")
+          else
+            SHA=$(sha256sum "$BIN" | awk '{print $1}')
+            SIZE=$(stat -c%s "$BIN")
+          fi
+          echo "sha256=$SHA" >> $GITHUB_OUTPUT
+          echo "size=$SIZE"  >> $GITHUB_OUTPUT
+          echo "## ${{ matrix.artifact_name }}${{ matrix.binary_suffix }}" >> $GITHUB_STEP_SUMMARY
+          echo "- platform: \`${{ matrix.platform_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- sha256: \`$SHA\`" >> $GITHUB_STEP_SUMMARY
+          echo "- size: $SIZE bytes" >> $GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/${{ matrix.artifact_name }}${{ matrix.binary_suffix }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Determine release tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.release_tag }}" ]; then
+            echo "tag=${{ inputs.release_tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Flatten artefact tree
+        run: |
+          set -euxo pipefail
+          mkdir -p out
+          find artifacts -type f -exec cp {} out/ \;
+          ls -la out
+
+      - name: Compute SHA256 manifest
+        id: hashes
+        run: |
+          set -euxo pipefail
+          cd out
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          echo "manifest_block<<EOF" >> $GITHUB_OUTPUT
+          for f in *; do
+            [ "$f" = "SHA256SUMS.txt" ] && continue
+            sha=$(sha256sum "$f" | awk '{print $1}')
+            size=$(stat -c%s "$f")
+            echo "| \`$f\` | \`$sha\` | $size |" >> $GITHUB_OUTPUT
+          done
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          files: |
+            out/*
+          fail_on_unmatched_files: true
+          body: |
+            adafruit-nrfutil bundled as a single static binary per platform.
+            Self-contained: no Python runtime dependencies on the user's machine.
+
+            | file | sha256 | size |
+            |---|---|---|
+            ${{ steps.hashes.outputs.manifest_block }}
+
+            Update Bert's manifest with `scripts/update_tools_manifest.py`:
+            ```
+            scripts/update_tools_manifest.py --owner ${{ github.repository_owner }} --repo bert --tag ${{ steps.tag.outputs.tag }}
+            ```
