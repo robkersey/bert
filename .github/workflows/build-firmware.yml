@@ -26,6 +26,10 @@ on:
 permissions:
   contents: write  # needed to create releases
 
+defaults:
+  run:
+    shell: bash  # GHA defaults to /bin/sh inside containers; we use bash idioms
+
 jobs:
   build:
     runs-on: ubuntu-latest
