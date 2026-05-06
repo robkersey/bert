@@ -17,13 +17,21 @@ from bert.adapters.firmware_fetch import FirmwareFetchError, FirmwareSpec
 # --------------------------------------------------------------------------- #
 
 
-def test_load_manifest_skips_placeholder_entries() -> None:
+def test_load_manifest_loads_shipped_entries() -> None:
+    """The wheel ships a real manifest pointing at firmware in GitHub Releases.
+
+    We don't pin the exact contents here (the manifest is updated by
+    ``scripts/update_manifest.py`` after each firmware release). Just check
+    the shape: hci is present and not a placeholder, sniffer is absent
+    (Bert relies on Nordic's bundled copy for that role).
+    """
     manifest = firmware_fetch.load_manifest()
-    # The shipped manifest has a placeholder hci entry; it should still load,
-    # but be marked is_placeholder so resolve_firmware refuses to fetch it.
-    if "hci" in manifest:
-        assert manifest["hci"].is_placeholder, "shipped hci entry should be placeholder for now"
-    # sniffer has no URL → not in the dict at all
+    assert "hci" in manifest
+    spec = manifest["hci"]
+    assert spec.filename.endswith(".hex"), spec.filename
+    assert len(spec.sha256) == 64
+    assert not spec.is_placeholder
+    # sniffer has no URL in the manifest → not in the dict at all
     assert "sniffer" not in manifest
 
 

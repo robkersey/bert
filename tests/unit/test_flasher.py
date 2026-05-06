@@ -52,8 +52,10 @@ def test_resolve_firmware_explains_when_nothing_found(
         flasher, "__file__", str(fake_pkg_root / "adapters" / "flasher.py")
     )
     monkeypatch.setenv("NRFUTIL_HOME", str(tmp_path / "no-nrfutil-here"))
+    # allow_download=False so we don't fall through to the manifest fetcher
+    # (which would actually succeed against the real shipped manifest).
     with pytest.raises(flasher.FlashError, match="no firmware found"):
-        flasher.resolve_firmware("hci", None)
+        flasher.resolve_firmware("hci", None, allow_download=False)
 
 
 # --------------------------------------------------------------------------- #
