@@ -52,6 +52,21 @@ jobs:
           west zephyr-export
           pip install -r zephyr/scripts/requirements.txt
 
+      - name: Locate Zephyr SDK
+        run: |
+          set -euxo pipefail
+          # The CI image bundles a Zephyr SDK under /opt/toolchains; CMake
+          # finds it via ZEPHYR_SDK_INSTALL_DIR. Discover whichever version
+          # the image ships, prefer the highest if multiple are present.
+          SDK_DIR=$(ls -d /opt/toolchains/zephyr-sdk-* 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "$SDK_DIR" ]; then
+            echo "::error::no Zephyr SDK found under /opt/toolchains; image may have changed"
+            ls -la /opt/toolchains 2>&1 || true
+            exit 1
+          fi
+          echo "Using Zephyr SDK at $SDK_DIR"
+          echo "ZEPHYR_SDK_INSTALL_DIR=$SDK_DIR" >> "$GITHUB_ENV"
+
       - name: Build hci_uart for nRF52840 USB Dongle
         working-directory: /workspace
         run: |
