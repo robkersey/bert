@@ -128,9 +128,12 @@ jobs:
           if [ ! -f "$BIN" ]; then
             echo "expected $BIN not produced"; ls -la dist; exit 1
           fi
-          # `pkg --help` is enough to prove the bundle has all imports.
-          "$BIN" pkg --help > /dev/null
+          # adafruit-nrfutil exposes 'dfu' as the only sub-group with 'genpkg'
+          # and 'serial' children. `pkg` is a pc-nrfutil thing.
+          "$BIN" --help > /dev/null
           "$BIN" dfu --help > /dev/null
+          "$BIN" dfu genpkg --help > /dev/null
+          "$BIN" dfu serial --help > /dev/null
 
       - name: Hash + size
         id: meta

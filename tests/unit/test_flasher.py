@@ -247,15 +247,24 @@ def test_ensure_nrfutil_falls_back_to_path_adafruit(
 
 
 def test_dfu_tool_command_dialects() -> None:
-    """The two CLI dialects produce the expected argv shape."""
+    """The two CLI dialects produce the expected argv shape.
+
+    pc-nrfutil and adafruit-nrfutil have *different* command structures; we
+    encode both because end users may have either.
+    """
     leg = flasher.DfuTool(path="nrfutil", dialect="legacy-python")
     ada = flasher.DfuTool(path="adafruit-nrfutil", dialect="adafruit")
+
+    # dfu serial — flag forms differ (subcommand + short flags both differ).
     assert leg.dfu_serial_args("p.zip", "/dev/cu.X") == [
         "nrfutil", "dfu", "usb-serial", "-pkg", "p.zip", "-p", "/dev/cu.X"
     ]
     assert ada.dfu_serial_args("p.zip", "/dev/cu.X") == [
-        "adafruit-nrfutil", "dfu", "serial", "--package", "p.zip", "--port", "/dev/cu.X"
+        "adafruit-nrfutil", "dfu", "serial", "-pkg", "p.zip", "-p", "/dev/cu.X"
     ]
-    # pkg generate flags are identical between dialects.
+
+    # pkg generate — pc-nrfutil's `pkg generate` vs adafruit's `dfu genpkg`.
     assert leg.pkg_generate_args("a.hex", "p.zip")[1:3] == ["pkg", "generate"]
-    assert ada.pkg_generate_args("a.hex", "p.zip")[1:3] == ["pkg", "generate"]
+    assert "--hw-version" in leg.pkg_generate_args("a.hex", "p.zip")
+    assert ada.pkg_generate_args("a.hex", "p.zip")[1:3] == ["dfu", "genpkg"]
+    assert "--hw-version" not in ada.pkg_generate_args("a.hex", "p.zip")

@@ -72,18 +72,38 @@ class DfuPort:
 
 @dataclass(frozen=True)
 class DfuTool:
-    """A flasher tool: path + which CLI dialect it speaks."""
+    """A flasher tool: path + which CLI dialect it speaks.
+
+    The two nrfutil flavours have *different* subcommand structures:
+
+    * Legacy ``pc-nrfutil``:
+        - ``nrfutil pkg generate --hw-version 52 --sd-req 0 \\
+              --application <hex> --application-version 1 <zip>``
+        - ``nrfutil dfu usb-serial -pkg <zip> -p <port>``
+
+    * ``adafruit-nrfutil`` (a fork that pre-dates the pkg/dfu split):
+        - ``adafruit-nrfutil dfu genpkg --application <hex> \\
+              --application-version 1 --sd-req 0 <zip>``
+        - ``adafruit-nrfutil dfu serial -pkg <zip> -p <port>``
+    """
 
     path: str
     dialect: str  # "adafruit" | "legacy-python"
 
     def dfu_serial_args(self, package: str, port: str) -> list[str]:
         if self.dialect == "adafruit":
-            return [self.path, "dfu", "serial", "--package", package, "--port", port]
+            return [self.path, "dfu", "serial", "-pkg", package, "-p", port]
         return [self.path, "dfu", "usb-serial", "-pkg", package, "-p", port]
 
     def pkg_generate_args(self, hex_path: str, out_zip: str) -> list[str]:
-        # Same flags between adafruit-nrfutil and pc-nrfutil.
+        if self.dialect == "adafruit":
+            return [
+                self.path, "dfu", "genpkg",
+                "--application", hex_path,
+                "--application-version", "1",
+                "--sd-req", "0",
+                out_zip,
+            ]
         return [
             self.path, "pkg", "generate",
             "--hw-version", "52",
@@ -101,25 +121,23 @@ def _probe_nrfutil(path: str) -> DfuTool | None:
         [path, "--help"], capture_output=True, text=True, timeout=10
     )
     text = (probe.stdout or "") + (probe.stderr or "")
-    # adafruit-nrfutil header explicitly says so; legacy pc-nrfutil mentions
-    # "Nordic Semiconductor". The new Rust nrfutil shows top-level subcommands
-    # like `device`, `ble-sniffer`, etc. and lacks `pkg`/`dfu` entirely.
     if "adafruit" in text.lower():
-        dialect = "adafruit"
-    elif "Nordic Semiconductor" in text and "pkg" in text and "dfu" in text:
-        dialect = "legacy-python"
-    else:
-        # Could be the Rust nrfutil that lacks pkg/dfu — confirm by probing.
-        sub_probe = subprocess.run(
-            [path, "pkg", "--help"], capture_output=True, text=True, timeout=10
-        )
-        if sub_probe.returncode == 0 and "generate" in (
-            sub_probe.stdout + sub_probe.stderr
-        ):
-            dialect = "legacy-python"
-        else:
-            return None
-    return DfuTool(path=path, dialect=dialect)
+        return DfuTool(path=path, dialect="adafruit")
+    # Legacy pc-nrfutil has a top-level `pkg` group; the Rust-based nrfutil
+    # has `device`/`ble-sniffer` instead. Probe for the differentiator.
+    sub_probe = subprocess.run(
+        [path, "pkg", "--help"], capture_output=True, text=True, timeout=10
+    )
+    if sub_probe.returncode == 0 and "generate" in (sub_probe.stdout + sub_probe.stderr):
+        return DfuTool(path=path, dialect="legacy-python")
+    # Maybe an adafruit fork that the --help text didn't reveal — check for
+    # `dfu genpkg`.
+    sub_probe2 = subprocess.run(
+        [path, "dfu", "--help"], capture_output=True, text=True, timeout=10
+    )
+    if sub_probe2.returncode == 0 and "genpkg" in (sub_probe2.stdout + sub_probe2.stderr):
+        return DfuTool(path=path, dialect="adafruit")
+    return None
 
 
 def ensure_nrfutil(*, allow_download: bool = True) -> DfuTool:

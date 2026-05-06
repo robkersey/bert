@@ -105,6 +105,7 @@ class Runner:
     def __init__(self, config: RunConfig) -> None:
         self.config = config
         self.timeline = Timeline()
+        self._dut_address: str | None = None
 
     async def run(self) -> RunResult:
         cfg = self.config
@@ -126,6 +127,23 @@ class Runner:
             SnifferCapture(output_path=pcap_path) if cfg.sniffer_enabled and pcap_path else None
         )
 
+        # Two-phase test run:
+        #   Phase 1: Bumble connected. Run host-source and ``both`` test cases.
+        #   Phase 2: Bumble disconnected, sniffer stopped, PCAP folded.
+        #            Run ota-source test cases against the populated timeline.
+        # Order is preserved within each phase so the report rows match the
+        # IR's declared order.
+
+        host_phase = [
+            tc for tc in cfg.profile.test_cases
+            if tc.source in (TestCaseSource.HOST, TestCaseSource.BOTH)
+        ]
+        ota_phase = [
+            tc for tc in cfg.profile.test_cases
+            if tc.source == TestCaseSource.OTA
+        ]
+        results_by_id: dict[str, TestResult] = {}
+
         try:
             if sniffer_ctx is not None:
                 await sniffer_ctx.start()
@@ -135,13 +153,14 @@ class Runner:
                 timeline=self.timeline,
                 passkey=cfg.passkey,
             ) as host:
-                await host.scan_and_connect(
+                match = await host.scan_and_connect(
                     dut_address=cfg.dut_address,
                     dut_name=cfg.dut_name,
                 )
-                for tc in cfg.profile.test_cases:
+                self._dut_address = match.address
+                for tc in host_phase:
                     res = await self._run_one(tc, host)
-                    result.results.append(res)
+                    results_by_id[tc.id] = res
         finally:
             if sniffer_ctx is not None:
                 await sniffer_ctx.stop()
@@ -149,10 +168,14 @@ class Runner:
         if pcap_path is not None and pcap_path.exists():
             fold_pcap_into_timeline(pcap_path, self.timeline)
 
-        # Re-evaluate any OTA-source test cases whose assertions are PCAP-based.
-        # In v1 the procedures themselves are responsible for inspecting the
-        # timeline post-fold; this hook is here so we can promote that logic
-        # to a separate phase later without changing the public contract.
+        # Phase 2: OTA-source test cases. They don't need the Bumble host
+        # but we still pass one (it'll be None) for context-shape consistency.
+        for tc in ota_phase:
+            res = await self._run_one(tc, host=None)  # type: ignore[arg-type]
+            results_by_id[tc.id] = res
+
+        # Re-emit results in the IR's original order so the report is stable.
+        result.results = [results_by_id[tc.id] for tc in cfg.profile.test_cases if tc.id in results_by_id]
 
         result.ended_at = datetime.now(UTC)
         return result
@@ -175,6 +198,7 @@ class Runner:
             bumble=host,
             timeline=self.timeline,
             started_ns=self.timeline.now_ns(),
+            extras={"dut_address": self._dut_address} if self._dut_address else {},
         )
         try:
             proc = registry.get(tc.procedure)

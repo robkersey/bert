@@ -132,8 +132,21 @@ async def ota_advertising_interval(ctx: TestContext) -> None:
     # in lieu of OTA. Either source is acceptable for this assertion.
     await asyncio.sleep(2.0)
 
-    # Try OTA first (sniffer-stamped timestamps; high precision).
-    ota = ctx.timeline.select(kind="btle.adv", source=EventSource.OTA)
+    # Wait briefly so the post-test PCAP fold has run and adv events landed.
+    # The runner folds the PCAP at teardown, but this procedure fires before
+    # teardown — so we look at host events first, then any OTA events that
+    # landed via an earlier fold (PCAP analyse re-runs).
+    ota_all = ctx.timeline.select(kind="btle.adv", source=EventSource.OTA)
+    # Filter to advertisements from the DUT only — scope to our connection's
+    # peer address if we have it.
+    dut_addr = (ctx.extras.get("dut_address") or "").upper().replace(":", "")
+    if dut_addr:
+        ota = [
+            e for e in ota_all
+            if (e.data.get("adva") or "").upper().replace(":", "").endswith(dut_addr[-12:])
+        ]
+    else:
+        ota = ota_all
     if len(ota) >= 5:
         deltas = ctx.timeline.deltas_ms(ota)
         median = statistics.median(deltas)
