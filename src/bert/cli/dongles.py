@@ -9,8 +9,8 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from bert.adapters.flasher import FlashError, flash_all
-from bert.adapters.hci_transport import discover_dongles
+from bert.adapters.flasher import DFU_BOOTLOADER_PID, FlashError, flash_all
+from bert.adapters.hci_transport import NORDIC_VID, discover_dongles
 
 app = typer.Typer(no_args_is_help=True, help="Manage dongles.")
 console = Console()
@@ -30,6 +30,47 @@ def list_cmd() -> None:
     table.add_column("description")
     for d in dongles:
         table.add_row(d.role, d.device, d.serial_number, d.description)
+    console.print(table)
+
+
+@app.command(name="list-all")
+def list_all_cmd() -> None:
+    """List every USB-serial port (debug helper).
+
+    Useful for triaging "Bert can't see my dongle" issues. Annotates each row
+    with what Bert thinks of it: ``nordic-app`` / ``nordic-dfu`` / ``other``.
+    """
+    from serial.tools import list_ports
+
+    table = Table(title="USB-serial ports")
+    table.add_column("device")
+    table.add_column("vid")
+    table.add_column("pid")
+    table.add_column("serial")
+    table.add_column("classification")
+    table.add_column("description")
+    rows = 0
+    for p in list_ports.comports():
+        vid = p.vid or 0
+        pid = p.pid or 0
+        if vid == NORDIC_VID and pid == DFU_BOOTLOADER_PID:
+            tag = "[yellow]nordic-dfu[/yellow]"
+        elif vid == NORDIC_VID:
+            tag = "[green]nordic-app[/green]"
+        else:
+            tag = "other"
+        table.add_row(
+            p.device,
+            f"0x{vid:04x}",
+            f"0x{pid:04x}",
+            p.serial_number or "-",
+            tag,
+            p.description or "",
+        )
+        rows += 1
+    if rows == 0:
+        console.print("[yellow](no serial ports detected)[/yellow]")
+        return
     console.print(table)
 
 

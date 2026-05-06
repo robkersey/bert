@@ -39,7 +39,7 @@ from rich.prompt import Prompt
 from serial.tools import list_ports
 
 from bert.adapters import dongle_registry, firmware_fetch
-from bert.adapters.hci_transport import NORDIC_VID
+from bert.adapters.hci_transport import NORDIC_VID, RECOGNISED_VIDS
 
 log = logging.getLogger(__name__)
 console = Console()
@@ -231,43 +231,85 @@ def list_dfu_ports() -> list[DfuPort]:
     return out
 
 
-async def wait_for_new_dfu(*, baseline: set[str], timeout_s: float = 60.0) -> DfuPort:
-    """Poll until a Nordic device in DFU mode appears that wasn't in ``baseline``."""
+async def wait_for_dfu(
+    *, baseline: set[str], timeout_s: float = 30.0, poll_interval_s: float = 0.5
+) -> DfuPort:
+    """Locate a dongle in DFU mode, prefering ones that appeared since ``baseline``.
 
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        for port in list_dfu_ports():
-            if port.device not in baseline:
-                return port
-        await asyncio.sleep(0.5)
-    raise FlashError(
-        f"timed out after {timeout_s:.0f}s waiting for a dongle in DFU mode.\n"
-        f"Press the small RESET button on the side of the dongle (nearest the SoC) "
-        f"to enter Open Bootloader."
-    )
+    Strategy:
 
-
-async def wait_for_app_enumeration(
-    *, dfu_baseline: set[str], timeout_s: float = 30.0
-) -> str | None:
-    """After flashing, wait for the dongle to come back up as the application device.
-
-    We can't predict the application's VID/PID exactly (depends on the firmware
-    image we just wrote). Heuristic: any Nordic-VID device that ISN'T in DFU
-    mode, that wasn't already attached, is the one. Returns the new device path
-    or None on timeout.
+      1. **Use a newly-appeared device first.** If a DFU port shows up that
+         wasn't present when ``baseline`` was snapshotted, return it
+         immediately (handles "press Enter, then press RESET").
+      2. **Otherwise, accept whatever DFU device is currently present.** This
+         covers the natural workflow where the user plugs in + presses RESET
+         *before* invoking ``bert flash-firmware`` (or before reaching the
+         prompt for the next role in a multi-dongle flash).
+      3. If multiple DFU devices are present and none is new vs the baseline,
+         the choice is ambiguous → error and ask the user to disconnect
+         spares.
+      4. If nothing appears in ``timeout_s``, time out with a hint.
     """
 
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
+        present = list_dfu_ports()
+        new_ports = [p for p in present if p.device not in baseline]
+        if new_ports:
+            return new_ports[0]
+        if present:
+            if len(present) > 1:
+                devs = ", ".join(p.device for p in present)
+                raise FlashError(
+                    f"multiple dongles in DFU mode ({devs}); disconnect all but "
+                    f"the one you want to flash, then try again."
+                )
+            log.info("using already-present DFU dongle on %s", present[0].device)
+            return present[0]
+        await asyncio.sleep(poll_interval_s)
+    raise FlashError(
+        f"timed out after {timeout_s:.0f}s waiting for a dongle in DFU mode.\n"
+        f"Press the small RESET button on the side of the dongle (nearest the SoC) "
+        f"to enter Open Bootloader. If the bootloader's red LED is already pulsing, "
+        f"check that it appears as a USB-CDC device:\n"
+        f"    .venv/bin/python -c \"from serial.tools.list_ports import comports; "
+        f"[print(p.device, hex(p.vid or 0), hex(p.pid or 0), p.description) for p in comports()]\""
+    )
+
+
+# Backwards-compatible alias so existing tests / callers keep working.
+async def wait_for_new_dfu(*, baseline: set[str], timeout_s: float = 30.0) -> DfuPort:
+    return await wait_for_dfu(baseline=baseline, timeout_s=timeout_s)
+
+
+async def wait_for_app_enumeration(
+    *,
+    dfu_baseline: set[str],
+    pre_flash_app_devices: set[str] | None = None,
+    timeout_s: float = 30.0,
+) -> tuple[str, str] | None:
+    """After flashing, wait for the dongle to come back up as the application device.
+
+    We can't predict the application's VID/PID exactly (depends on the firmware
+    image we wrote — Zephyr samples use Zephyr's VID 0x2FE3, Nordic samples
+    use 0x1915). Heuristic: any Bert-recognised-VID device that ISN'T in DFU
+    mode and wasn't already attached pre-flash is the one. Returns
+    ``(device_path, serial_number)`` or ``None`` on timeout.
+    """
+
+    pre_app = pre_flash_app_devices or set()
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
         for p in list_ports.comports():
-            if getattr(p, "vid", None) != NORDIC_VID:
+            vid = getattr(p, "vid", None)
+            if vid not in RECOGNISED_VIDS:
                 continue
             if getattr(p, "pid", None) == DFU_BOOTLOADER_PID:
                 continue
-            if p.device in dfu_baseline:
+            if p.device in dfu_baseline or p.device in pre_app:
                 continue
-            return p.device
+            sn = (getattr(p, "serial_number", "") or "").strip()
+            return p.device, sn
         await asyncio.sleep(0.5)
     return None
 
@@ -298,8 +340,14 @@ async def flash_one(role: str, firmware_path: Path, *, nrfutil_path: str) -> str
         show_default=False,
     )
 
-    console.print("[dim]waiting for DFU bootloader to enumerate…[/dim]")
-    port = await wait_for_new_dfu(baseline=baseline_dfu, timeout_s=60)
+    pre_flash_app_devices = {
+        p.device for p in list_ports.comports()
+        if getattr(p, "vid", None) in RECOGNISED_VIDS
+        and getattr(p, "pid", None) != DFU_BOOTLOADER_PID
+    }
+
+    console.print("[dim]looking for DFU bootloader…[/dim]")
+    port = await wait_for_dfu(baseline=baseline_dfu, timeout_s=30)
     console.print(f"[green]✓[/green] DFU device on {port.device} (sn={port.serial_number})")
 
     suffix = firmware_path.suffix.lower()
@@ -352,29 +400,42 @@ async def flash_one(role: str, firmware_path: Path, *, nrfutil_path: str) -> str
             ) from e
         log.debug("nrfutil dfu output:\n%s", proc.stdout)
 
-    # Persist role ↔ factory-serial mapping so discovery can find this dongle.
-    if port.serial_number:
-        dongle_registry.upsert(role, port.serial_number)
+    # Wait for the dongle to re-enumerate as the application device. The new
+    # firmware presents under a different USB descriptor — Zephyr samples
+    # change VID and reformat the iSerialNumber from the same factory data.
+    # We register *that* serial number in the registry so discovery works
+    # against the running firmware (the bootloader's SN is irrelevant once
+    # the app is alive).
+    enum = await wait_for_app_enumeration(
+        dfu_baseline={port.device},
+        pre_flash_app_devices=pre_flash_app_devices,
+        timeout_s=30,
+    )
+    if enum is not None:
+        new_dev, app_sn = enum
+        console.print(f"[green]✓[/green] {role} dongle re-enumerated as {new_dev}")
+        register_sn = app_sn or port.serial_number
+    else:
         console.print(
-            f"[green]✓[/green] registered {role} dongle (sn={port.serial_number}) "
+            f"[yellow]![/yellow] {role} dongle did not re-enumerate within 30s. "
+            f"It probably finished but is slow; run `bert dongles list-all` to "
+            f"check. Falling back to the bootloader SN for registration; if "
+            f"discovery later fails, re-run `bert flash-firmware`."
+        )
+        new_dev = None
+        register_sn = port.serial_number
+
+    if register_sn:
+        dongle_registry.upsert(role, register_sn)
+        console.print(
+            f"[green]✓[/green] registered {role} dongle (sn={register_sn}) "
             f"in {dongle_registry.registry_path()}"
         )
     else:
         console.print(
-            "[yellow]![/yellow] no USB serial number reported by bootloader; "
-            "the dongle won't auto-discover. Add it manually to "
+            "[yellow]![/yellow] no USB serial number captured; the dongle "
+            "won't auto-discover. Add it manually to "
             f"{dongle_registry.registry_path()} or rerun `bert flash-firmware`."
-        )
-
-    # The DFU port disappears at the end of flashing. The new firmware comes up
-    # under a different USB descriptor. Wait briefly for it.
-    new_dev = await wait_for_app_enumeration(dfu_baseline={port.device}, timeout_s=20)
-    if new_dev:
-        console.print(f"[green]✓[/green] {role} dongle re-enumerated as {new_dev}")
-    else:
-        console.print(
-            f"[yellow]![/yellow] {role} dongle did not re-enumerate within 20s. "
-            f"It probably finished but is slow; run `bert dongles list` to confirm."
         )
     return new_dev
 

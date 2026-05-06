@@ -30,6 +30,8 @@ from bert.adapters import dongle_registry
 log = logging.getLogger(__name__)
 
 NORDIC_VID = 0x1915
+ZEPHYR_VID = 0x2FE3  # Zephyr's allocated USB VID; used by hci_uart, hci_usb_h4, etc.
+RECOGNISED_VIDS = frozenset({NORDIC_VID, ZEPHYR_VID})
 HCI_SERIAL_PREFIX = "BERT-HCI-"  # legacy: kept for backward-compat
 SNIFFER_SERIAL_PREFIX = "BERT-SNF-"
 DEFAULT_BAUD = 1_000_000
@@ -65,11 +67,17 @@ def _role_from_sn(sn: str) -> str | None:
 
 
 def discover_dongles() -> list[Dongle]:
-    """Return all Bert-registered Nordic dongles currently attached."""
+    """Return all Bert-registered dongles currently attached.
+
+    Accepts both Nordic-VID devices (sniffer firmware, Open Bootloader) and
+    Zephyr-VID devices (the ``hci_uart`` / ``hci_usb_h4`` Zephyr samples we
+    flash). Identification is by USB iSerialNumber match against the registry
+    written at flash time.
+    """
     out: list[Dongle] = []
     for p in list_ports.comports():
         vid = getattr(p, "vid", None)
-        if vid != NORDIC_VID:
+        if vid not in RECOGNISED_VIDS:
             continue
         sn = (getattr(p, "serial_number", "") or "").strip()
         if not sn:
@@ -77,7 +85,7 @@ def discover_dongles() -> list[Dongle]:
         role = _role_from_sn(sn)
         if role is None:
             log.debug(
-                "Nordic dongle on %s (sn=%s) not registered as hci/sniffer; "
+                "USB-CDC dongle on %s (sn=%s) not registered as hci/sniffer; "
                 "run `bert flash-firmware` to register it",
                 p.device,
                 sn,
