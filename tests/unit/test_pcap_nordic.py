@@ -16,15 +16,24 @@ from bert.adapters import pcap_nordic
 
 
 def _nordic_header(channel: int = 37, rssi: int = -40, header_length: int = 10) -> bytes:
-    """Build a synthetic Nordic per-packet header. Enough fields to satisfy the parser."""
-    rssi_byte = (rssi + 256) if rssi < 0 else rssi
-    return bytes([
-        0,                  # board_id
-        header_length,      # header_length
+    """Build a synthetic Nordic packet record (nrfutil ble-sniffer 4.x layout):
+
+    7-byte UART preamble (just zeroed-out; we don't actually parse it),
+    followed by the Nordic per-packet header where the first byte IS the
+    header length.
+
+    Nordic stores RSSI as absolute value (0..127 representing -dBm), so we
+    write the absolute value here.
+    """
+    rssi_abs = abs(rssi) & 0xFF
+    uart_preamble = bytes(7)
+    nordic_header = bytes([
+        header_length,      # header length
         0x00,               # flags
         channel,            # channel
-        rssi_byte,          # rssi
-    ]) + bytes(header_length - 5)  # padding to header_length
+        rssi_abs,           # rssi (positive == -dBm)
+    ]) + bytes(header_length - 4)  # event counter + delta time
+    return uart_preamble + nordic_header
 
 
 def _adv_ind_packet(adva: bytes = b"\x06\x05\x04\x03\x02\x01") -> bytes:
