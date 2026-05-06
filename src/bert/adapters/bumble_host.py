@@ -69,6 +69,20 @@ class BumbleHost:
         finally:
             await host._stop()
 
+    @staticmethod
+    def _uuid(value: str):
+        """Coerce a UUID-ish string ("0x180D" or full 128-bit) to a Bumble UUID."""
+        from bumble.core import UUID  # type: ignore[import-not-found]
+
+        s = value.strip()
+        if s.lower().startswith("0x"):
+            s = s[2:]
+        if len(s) <= 4:
+            return UUID.from_16_bits(int(s, 16))
+        if len(s) <= 8:
+            return UUID.from_32_bits(int(s, 16))
+        return UUID(value)
+
     async def _start(self, transport: str | None) -> None:
         from bumble.device import Device  # type: ignore[import-not-found]
         from bumble.transport import open_transport_or_link  # type: ignore[import-not-found]
@@ -115,7 +129,7 @@ class BumbleHost:
         *,
         dut_address: str | None = None,
         dut_name: str | None = None,
-        scan_timeout_s: float = 10.0,
+        scan_timeout_s: float = 30.0,
     ) -> ScanMatch:
         if not (dut_address or dut_name):
             raise ValueError("dut_address or dut_name must be provided")
@@ -127,6 +141,7 @@ class BumbleHost:
             data={"address": match.address, "name": match.name, "rssi": match.rssi},
         )
 
+        from bumble.device import Peer  # type: ignore[import-not-found]
         from bumble.hci import Address  # type: ignore[import-not-found]
 
         addr = Address(match.address)
@@ -136,17 +151,18 @@ class BumbleHost:
             EventSource.HOST,
             data={"peer": match.address},
         )
+
+        self._peer = Peer(self._connection)
+
+        # MTU exchange is now done via the Peer (Bumble ≥0.0.220).
         try:
-            mtu = await self._connection.exchange_mtu(247)
+            mtu = await self._peer.request_mtu(247)
             self._timeline.add(
                 "host.mtu_exchanged", EventSource.HOST, data={"mtu": mtu}
             )
         except Exception as exc:  # noqa: BLE001
             log.warning("MTU exchange failed: %s", exc)
 
-        from bumble.profiles.gap import Peer  # type: ignore[import-not-found]
-
-        self._peer = Peer(self._connection)
         return match
 
     @staticmethod
@@ -349,10 +365,12 @@ class BumbleHost:
     async def _find_characteristic(self, service_uuid: str, char_uuid: str) -> Any:
         if self._peer is None:
             raise RuntimeError("not connected")
-        services = await self._peer.discover_services([service_uuid])
+        svc_uuid = self._uuid(service_uuid)
+        chr_uuid = self._uuid(char_uuid)
+        services = await self._peer.discover_services([svc_uuid])
         if not services:
             raise RuntimeError(f"service {service_uuid} not present on DUT")
-        chars = await services[0].discover_characteristics([char_uuid])
+        chars = await self._peer.discover_characteristics([chr_uuid], service=services[0])
         if not chars:
             raise RuntimeError(f"characteristic {char_uuid} not present in {service_uuid}")
         return chars[0]
