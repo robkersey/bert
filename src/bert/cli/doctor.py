@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib
 import platform
+import shutil
+import subprocess
 import sys
 from importlib.metadata import PackageNotFoundError, version
 
@@ -12,7 +14,6 @@ from rich.console import Console
 
 from bert.adapters import dongle_registry
 from bert.adapters.hci_transport import discover_dongles
-from bert.adapters.sniffer import VENDOR_DIR
 
 console = Console()
 
@@ -61,18 +62,28 @@ def doctor() -> None:
             issues += 1
 
     console.print()
-    console.print("Vendored sniffer plugin:")
-    extcap_candidates = [
-        VENDOR_DIR / "nrf_sniffer_ble.py",
-        VENDOR_DIR / "extcap" / "nrf_sniffer_ble.py",
-    ]
-    found = next((c for c in extcap_candidates if c.exists()), None)
-    if found:
-        console.print(f"  [green]✓[/green] {found}")
-    else:
-        console.print(f"  [yellow]not vendored at {VENDOR_DIR}[/yellow]")
-        console.print("  Run `bert flash-firmware` to install (it bundles the extcap plugin).")
+    console.print("nrfutil ble-sniffer:")
+    nrfutil = shutil.which("nrfutil")
+    if nrfutil is None:
+        console.print(
+            "  [yellow]nrfutil not found on PATH[/yellow]\n"
+            "  Install Nordic's nrfutil from "
+            "https://www.nordicsemi.com/Products/Development-tools/nRF-Util "
+            "and run `nrfutil install ble-sniffer`."
+        )
         issues += 1
+    else:
+        probe = subprocess.run(
+            [nrfutil, "ble-sniffer", "--help"], capture_output=True, text=True
+        )
+        if probe.returncode != 0:
+            console.print(
+                f"  [yellow]`nrfutil ble-sniffer` not installed[/yellow] "
+                f"(at {nrfutil})\n  Run `nrfutil install ble-sniffer`."
+            )
+            issues += 1
+        else:
+            console.print(f"  [green]✓[/green] {nrfutil} ble-sniffer installed")
 
     console.print()
     if issues:
