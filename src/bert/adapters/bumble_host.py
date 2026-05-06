@@ -149,6 +149,83 @@ class BumbleHost:
         self._peer = Peer(self._connection)
         return match
 
+    @staticmethod
+    def _adv_local_name(adv: Any) -> str | None:
+        """Extract the local name from an Advertisement, tolerating Bumble API drift.
+
+        Bumble exposes the COMPLETE_LOCAL_NAME (0x09) and SHORTENED_LOCAL_NAME
+        (0x08) AD types via ``AdvertisingData.get(type_id)`` returning a parsed
+        string. Some older versions returned bytes — decode if needed.
+        """
+        for ad_type in (0x09, 0x08):
+            try:
+                val = adv.data.get(ad_type)
+            except Exception:  # noqa: BLE001 - tolerate any Bumble change
+                val = None
+            if val is None:
+                continue
+            if isinstance(val, bytes):
+                try:
+                    return val.decode("utf-8", errors="replace")
+                except Exception:  # noqa: BLE001
+                    return None
+            return str(val)
+        return None
+
+    async def scan(
+        self,
+        *,
+        duration_s: float = 10.0,
+        name_prefix: str | None = None,
+        service_uuid: str | None = None,
+        on_seen: Any = None,  # callable(ScanMatch) | None
+    ) -> dict[str, ScanMatch]:
+        """Passive scan for ``duration_s`` seconds; return ``address → ScanMatch``.
+
+        The latest advertisement from each address wins (RSSI is updated).
+        Optional filters:
+
+          * ``name_prefix`` — only keep advs whose local name starts with this
+          * ``service_uuid`` — only keep advs that include this UUID in their
+            service-list AD field
+
+        ``on_seen`` is called whenever a *new* device appears, so a CLI can
+        render a live-updating table without waiting for the full duration.
+        """
+
+        seen: dict[str, ScanMatch] = {}
+
+        def _on_advertisement(adv: Any) -> None:
+            address = str(adv.address)
+            name = self._adv_local_name(adv)
+            rssi = adv.rssi
+            if name_prefix and not (name or "").startswith(name_prefix):
+                return
+            if service_uuid:
+                wanted = service_uuid.upper().lstrip("0X").lstrip("0x")
+                uuids: list[str] = []
+                for ad_type in (0x02, 0x03, 0x06, 0x07, 0x14, 0x15):
+                    val = adv.data.get(ad_type)
+                    if val:
+                        uuids.append(str(val))
+                if not any(wanted in u.upper() for u in uuids):
+                    return
+            is_new = address not in seen
+            seen[address] = ScanMatch(address=address, name=name, rssi=rssi)
+            if is_new and on_seen is not None:
+                try:
+                    on_seen(seen[address])
+                except Exception:  # noqa: BLE001 - cosmetic callback must not abort scan
+                    log.exception("on_seen callback raised; ignoring")
+
+        self._device.on("advertisement", _on_advertisement)
+        await self._device.start_scanning()
+        try:
+            await asyncio.sleep(duration_s)
+        finally:
+            await self._device.stop_scanning()
+        return seen
+
     async def _scan_for_match(
         self,
         dut_address: str | None,
@@ -160,7 +237,7 @@ class BumbleHost:
 
         def _on_advertisement(adv: Any) -> None:  # bumble.device.Advertisement
             address = str(adv.address)
-            name = adv.data.get_string(0x09) or adv.data.get_string(0x08)
+            name = self._adv_local_name(adv)
             rssi = adv.rssi
             if dut_address and address.upper() != dut_address.upper():
                 return

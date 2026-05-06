@@ -13,6 +13,7 @@ from bert.cli import ir as ir_cli
 from bert.cli import pcap as pcap_cli
 from bert.cli import profiles as profiles_cli
 from bert.cli import run as run_cli
+from bert.cli import scan as scan_cli
 from bert.cli import tools as tools_cli
 
 app = typer.Typer(
@@ -28,6 +29,7 @@ app.add_typer(firmware_cli.app, name="firmware", help="Manage prebuilt firmware 
 app.add_typer(tools_cli.app, name="tools", help="Manage helper-binary cache (bert-dfu).")
 app.add_typer(pcap_cli.app, name="pcap", help="Offline PCAP analysis.")
 app.command(name="run", help="Run a profile against a DUT.")(run_cli.run_command)
+app.command(name="scan", help="Scan for nearby BLE peripherals.")(scan_cli.scan_command)
 app.command(name="doctor", help="Verify the local install.")(doctor_cli.doctor)
 
 
