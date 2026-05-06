@@ -22,7 +22,7 @@ on:
       adafruit_nrfutil_version:
         description: "adafruit-nrfutil pin"
         required: true
-        default: "0.5.3.post17"
+        default: "0.5.3.post16"
   push:
     tags:
       - "dfu-tools-*"
@@ -58,7 +58,7 @@ jobs:
             binary_suffix: ".exe"
     runs-on: ${{ matrix.runner }}
     env:
-      ADAFRUIT_NRFUTIL_VERSION: ${{ inputs.adafruit_nrfutil_version || '0.5.3.post17' }}
+      ADAFRUIT_NRFUTIL_VERSION: ${{ inputs.adafruit_nrfutil_version || '0.5.3.post16' }}
     steps:
       - uses: actions/checkout@v4
 
