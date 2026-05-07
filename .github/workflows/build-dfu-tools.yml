@@ -43,19 +43,15 @@ jobs:
           - runner: macos-14         # Apple Silicon
             platform_tag: darwin-arm64
             artifact_name: bert-dfu-darwin-arm64
-            binary_suffix: ""
           - runner: macos-13         # Intel
             platform_tag: darwin-x86_64
             artifact_name: bert-dfu-darwin-x86_64
-            binary_suffix: ""
           - runner: ubuntu-22.04
             platform_tag: linux-x86_64
             artifact_name: bert-dfu-linux-x86_64
-            binary_suffix: ""
           - runner: windows-2022
             platform_tag: windows-x86_64
             artifact_name: bert-dfu-windows-x86_64.exe
-            binary_suffix: ".exe"
     runs-on: ${{ matrix.runner }}
     env:
       ADAFRUIT_NRFUTIL_VERSION: ${{ inputs.adafruit_nrfutil_version || '0.5.3.post16' }}
@@ -124,7 +120,7 @@ jobs:
       - name: Smoke-test built binary
         run: |
           set -euxo pipefail
-          BIN="dist/${{ matrix.artifact_name }}${{ matrix.binary_suffix }}"
+          BIN="dist/${{ matrix.artifact_name }}"
           if [ ! -f "$BIN" ]; then
             echo "expected $BIN not produced"; ls -la dist; exit 1
           fi
@@ -139,7 +135,7 @@ jobs:
         id: meta
         run: |
           set -euxo pipefail
-          BIN="dist/${{ matrix.artifact_name }}${{ matrix.binary_suffix }}"
+          BIN="dist/${{ matrix.artifact_name }}"
           if [[ "${{ matrix.runner }}" == windows-* ]]; then
             SHA=$(sha256sum "$BIN" | awk '{print $1}')
             SIZE=$(wc -c < "$BIN" | tr -d ' ')
@@ -152,7 +148,7 @@ jobs:
           fi
           echo "sha256=$SHA" >> $GITHUB_OUTPUT
           echo "size=$SIZE"  >> $GITHUB_OUTPUT
-          echo "## ${{ matrix.artifact_name }}${{ matrix.binary_suffix }}" >> $GITHUB_STEP_SUMMARY
+          echo "## ${{ matrix.artifact_name }}" >> $GITHUB_STEP_SUMMARY
           echo "- platform: \`${{ matrix.platform_tag }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- sha256: \`$SHA\`" >> $GITHUB_STEP_SUMMARY
           echo "- size: $SIZE bytes" >> $GITHUB_STEP_SUMMARY
@@ -160,7 +156,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: dist/${{ matrix.artifact_name }}${{ matrix.binary_suffix }}
+          path: dist/${{ matrix.artifact_name }}
           if-no-files-found: error
 
   release:
