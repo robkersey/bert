@@ -31,11 +31,6 @@
           "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
           "size_bytes": 0
         },
-        "darwin-x86_64": {
-          "filename": "bert-dfu-darwin-x86_64",
-          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-          "size_bytes": 0
-        },
         "linux-x86_64": {
           "filename": "bert-dfu-linux-x86_64",
           "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
@@ -46,6 +41,10 @@
           "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
           "size_bytes": 0
         }
+      },
+      "platform_aliases": {
+        "_comment": "Map host platforms we don't ship binaries for to ones that work via emulation. macOS Intel runs darwin-arm64 binaries via Rosetta 2.",
+        "darwin-x86_64": "darwin-arm64"
       }
     }
   }

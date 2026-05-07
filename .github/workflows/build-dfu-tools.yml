@@ -43,9 +43,9 @@ jobs:
           - runner: macos-14         # Apple Silicon
             platform_tag: darwin-arm64
             artifact_name: bert-dfu-darwin-arm64
-          - runner: macos-13         # Intel
-            platform_tag: darwin-x86_64
-            artifact_name: bert-dfu-darwin-x86_64
+          # macos-13 (Intel) runners deprecated by GitHub; queue indefinitely.
+          # Intel Macs run the arm64 binary fine via Rosetta 2 (bundled with
+          # macOS). The Bert runtime handles the platform-tag fallback.
           - runner: ubuntu-22.04
             platform_tag: linux-x86_64
             artifact_name: bert-dfu-linux-x86_64

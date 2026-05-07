@@ -146,7 +146,13 @@ def host_platform_tag() -> str:
 
 
 def load_tool_manifest() -> dict[str, ToolSpec]:
-    """Load all helper-binary specs for the current host platform."""
+    """Load all helper-binary specs for the current host platform.
+
+    Honours per-tool ``platform_aliases``: if the host's tag isn't in the
+    ``platforms`` map, look it up in ``platform_aliases`` to find a
+    compatible alternative (e.g. Intel Macs falling back to ``darwin-arm64``
+    binaries that run under Rosetta 2).
+    """
 
     raw = _read_manifest()
     out: dict[str, ToolSpec] = {}
@@ -155,7 +161,18 @@ def load_tool_manifest() -> dict[str, ToolSpec]:
         if tool_name == "comment" or not isinstance(entry, dict):
             continue
         platforms = entry.get("platforms") or {}
-        plat_entry = platforms.get(host_tag)
+        aliases = entry.get("platform_aliases") or {}
+        # Resolve host_tag → effective platform via alias chain (max one hop).
+        effective_tag = host_tag
+        if effective_tag not in platforms and effective_tag in aliases:
+            aliased = aliases[effective_tag]
+            if isinstance(aliased, str) and aliased in platforms:
+                log.info(
+                    "platform %s: falling back to %s binary (alias)",
+                    host_tag, aliased,
+                )
+                effective_tag = aliased
+        plat_entry = platforms.get(effective_tag)
         if plat_entry is None:
             log.debug("no %s binary for platform %s", tool_name, host_tag)
             continue
@@ -169,7 +186,7 @@ def load_tool_manifest() -> dict[str, ToolSpec]:
             continue
         out[tool_name] = ToolSpec(
             name=tool_name,
-            platform=host_tag,
+            platform=effective_tag,  # actual binary's native platform; see alias resolution above
             filename=filename,
             url=url,
             sha256=sha,

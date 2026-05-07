@@ -214,6 +214,19 @@ def test_load_tool_manifest_skips_unknown_platform(
     assert tools == {}
 
 
+def test_load_tool_manifest_resolves_platform_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Intel Macs (darwin-x86_64) should pick up the darwin-arm64 binary
+    via the manifest's platform_aliases. Rosetta 2 handles the rest."""
+    monkeypatch.setattr(firmware_fetch, "host_platform_tag", lambda: "darwin-x86_64")
+    tools = firmware_fetch.load_tool_manifest()
+    if "bert-dfu" in tools:
+        # The shipped manifest aliases darwin-x86_64 → darwin-arm64.
+        assert tools["bert-dfu"].platform == "darwin-arm64"
+        assert tools["bert-dfu"].filename == "bert-dfu-darwin-arm64"
+
+
 @pytest.fixture
 def isolated_tool_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("BERT_TOOLS_CACHE", str(tmp_path / "tcache"))
