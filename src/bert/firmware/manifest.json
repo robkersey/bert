@@ -22,24 +22,24 @@
   "tools": {
     "comment": "Pre-built helper binaries. We use adafruit-nrfutil (a maintained fork of pc-nrfutil) bundled into a single executable via PyInstaller, so end users don't have to `pip install nrfutil` and pin click<8.0 (which conflicts with typer). Built by .github/workflows/build-dfu-tools.yml.",
     "bert-dfu": {
-      "release_tag": "dfu-tools-PLACEHOLDER",
-      "base_url": "https://github.com/robkersey/bert/releases/download/dfu-tools-PLACEHOLDER",
+      "release_tag": "dfu-tools-2026.05.07",
+      "base_url": "https://github.com/robkersey/bert/releases/download/dfu-tools-2026.05.07",
       "description": "adafruit-nrfutil bundled as a single static binary. Used for `pkg generate` and `dfu serial` against the nRF52840 USB Dongle's Open Bootloader.",
       "platforms": {
         "darwin-arm64": {
           "filename": "bert-dfu-darwin-arm64",
-          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-          "size_bytes": 0
+          "sha256": "830da97b1fd3f9c9ff6f30c59d8c9f43ecf0ff6bb3b0436c66fc269c635a8883",
+          "size_bytes": 10635232
         },
         "linux-x86_64": {
           "filename": "bert-dfu-linux-x86_64",
-          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-          "size_bytes": 0
+          "sha256": "dea52446345976b7ce034864a314d0a4b5f5c4acc0bedb256c3304e3922f6b4a",
+          "size_bytes": 21084088
         },
         "windows-x86_64": {
           "filename": "bert-dfu-windows-x86_64.exe",
-          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-          "size_bytes": 0
+          "sha256": "13a4be7e32fa10f1e059041875c38680a2208dd5fad2fb0a4243efc3359177a8",
+          "size_bytes": 11259701
         }
       },
       "platform_aliases": {
